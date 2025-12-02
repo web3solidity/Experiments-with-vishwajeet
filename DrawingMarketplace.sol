@@ -6,11 +6,21 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract DigitalSketchMarketplace is Ownable, ReentrancyGuard {
+
+    // --- Custom Errors ---
+    error InvalidWallet();
+    error SketchNotFound();
+    error CannotBuyOwnSketch();
+    error IncorrectPayment();
+    error ArtistPaymentFailed();
+    error PlatformPaymentFailed();
+    error FeeTooHigh();
+    error RenounceDisabled();
+
     struct Sketch {
         address artist;
         uint256 price; // in wei
         string ipfsHash; // off-chain file reference
-        bool exists;
     }
 
     mapping(uint256 => Sketch) public sketches;
@@ -32,48 +42,52 @@ contract DigitalSketchMarketplace is Ownable, ReentrancyGuard {
     );
 
     constructor(address payable _platformWallet) Ownable(msg.sender) {
-        require(_platformWallet != address(0), "Invalid platform wallet");
+        if(_platformWallet == address(0)) revert InvalidWallet();
         platformWallet = _platformWallet;
     }
 
     function addSketch(uint256 _price, string memory _ipfsHash) external {
-        require(_price > 0, "Price must be > 0");
-        require(bytes(_ipfsHash).length > 0, "IPFS hash required");
+        if(_price == 0)revert IncorrectPayment();
+        if(bytes(_ipfsHash).length == 0) revert IncorrectPayment();
 
-        sketchCount++;
-        sketches[sketchCount] = Sketch(msg.sender, _price, _ipfsHash, true);
+          unchecked {
+            sketchCount++;
+        }
+        
+        sketches[sketchCount] = Sketch(msg.sender, _price, _ipfsHash);
 
         emit SketchAdded(sketchCount, msg.sender, _price, _ipfsHash);
     }
 
     function purchaseSketch(uint256 _id) external payable nonReentrant {
         Sketch memory sketch = sketches[_id];
-        require(sketch.exists, "Sketch does not exist");
-        require(msg.value >= sketch.price, "Insufficient payment");
+        if(_id==0 || _id > sketchCount) revert SketchNotFound();
+        if(msg.sender == sketch.artist) revert CannotBuyOwnSketch();
+        if(msg.value != sketch.price)revert IncorrectPayment();
 
         uint256 platformFee = (msg.value * platformFeePercent) / 100;
         uint256 artistPayout = msg.value - platformFee;
 
         // Transfer funds
         (bool sentArtist, ) = payable(sketch.artist).call{value: artistPayout}("");
-        require(sentArtist, "Artist payment failed");
+        if(!sentArtist) revert  ArtistPaymentFailed();
 
         (bool sentPlatform, ) = platformWallet.call{value: platformFee}("");
-        require(sentPlatform, "Platform fee transfer failed");
+        if(!sentPlatform) revert PlatformPaymentFailed();
 
         emit SketchPurchased(_id, msg.sender, msg.value);
     }
 
     function setPlatformFee(uint256 _feePercent) external onlyOwner {
-        require(_feePercent <= 20, "Fee too high");
+        if(_feePercent >= 21)revert FeeTooHigh();
         platformFeePercent = _feePercent;
     }
 
     function setPlatformWallet(address payable _wallet) external onlyOwner {
-        require(_wallet != address(0), "Invalid wallet");
+        if(_wallet == address(0))revert InvalidWallet();
         platformWallet = _wallet;
     }
     function renounceOwnership() public pure override {
-        revert("Renouncing ownership disabled");
+        revert RenounceDisabled();
     }
 }
